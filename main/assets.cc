@@ -378,7 +378,7 @@ bool Assets::EmoteStrategy::InitializePartition(Assets* assets) {
                 .mmap_enable = true, //must be true here!!!
             },
         };
-        ret = emote_mount_assets(emote_display->GetEmoteHandle(), &data);
+        ret = emote_mount_and_load_assets(emote_display->GetEmoteHandle(), &data);
     } else {
         ESP_LOGE(TAG, "Emote display is not initialized");
     }
@@ -415,13 +415,7 @@ bool Assets::EmoteStrategy::GetAssetData(Assets* assets, const std::string& name
 
 bool Assets::EmoteStrategy::Apply(Assets* assets, bool refresh_display_theme) {
     Assets::LoadSrmodelsFromIndex(assets);
-
-    auto display = Board::GetInstance().GetDisplay();
-    auto* emote_display = dynamic_cast<emote::EmoteDisplay*>(display);
-
-    if (emote_display && emote_display->GetEmoteHandle() != nullptr) {
-        emote_load_assets(emote_display->GetEmoteHandle());
-    }
+    // Assets are already loaded during InitializePartition() via emote_mount_and_load_assets()
     return true;
 }
 

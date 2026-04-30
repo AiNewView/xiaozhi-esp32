@@ -768,6 +768,24 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font
         srmodels = process_sr_models(wakenet_model_paths, multinet_model_paths, temp_build_dir, assets_dir) if (wakenet_model_paths or multinet_model_paths) else None
         text_font = process_text_font(text_font_path, assets_dir) if text_font_path else None
         emoji_collection = process_emoji_collection(emoji_collection_path, assets_dir) if emoji_collection_path else None
+
+        # Add missing emoji aliases that firmware expects but some collections don't provide
+        if emoji_collection:
+            existing_names = {e['name'] for e in emoji_collection}
+            # Find a fallback .eaf file from existing entries
+            fallback_entry = next((e for e in emoji_collection if e.get('file', '').endswith('.eaf')), None)
+            # Find the "neutral" entry as a better fallback
+            neutral_entry = next((e for e in emoji_collection if e['name'] == 'neutral'), fallback_entry)
+            aliases_needed = ['microchip_ai', 'sleeping', 'speaking']
+            if neutral_entry:
+                for alias in aliases_needed:
+                    if alias not in existing_names:
+                        emoji_collection.append({
+                            'name': alias,
+                            'file': neutral_entry['file'],
+                            'eaf': neutral_entry.get('eaf', {'loop': True, 'fps': 20})
+                        })
+
         extra_files = process_extra_files(extra_files_path, assets_dir) if extra_files_path else None
         
         # Generate index.json

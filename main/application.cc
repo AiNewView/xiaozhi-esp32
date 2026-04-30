@@ -62,6 +62,9 @@ void Application::Initialize() {
     auto& board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
 
+    // Ensure assets are loaded before any display operations
+    Assets::GetInstance();
+
     // Setup the display
     auto display = board.GetDisplay();
     display->SetupUI();
