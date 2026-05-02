@@ -29,6 +29,7 @@ The stable version of v1 is 1.9.2. You can switch to v1 by running `git checkout
 - Voice interaction based on streaming ASR + LLM + TTS architecture
 - Speaker recognition, identifies the current speaker [3D Speaker](https://github.com/modelscope/3D-Speaker)
 - OLED / LCD display, supports emoji display
+- Independent mouth animation on 240×240 square displays, with 12 emotion-driven mouth shapes (U-smile, inverted-U sad, V-angry, O-shocked, etc.) and open/close talking animation
 - Battery display and power management
 - Multi-language support (Chinese, English, Japanese)
 - Supports ESP32-C3, ESP32-S3, ESP32-P4 chip platforms
