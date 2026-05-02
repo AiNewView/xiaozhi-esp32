@@ -139,6 +139,7 @@ void EmoteDisplay::SetEmotion(const char* const emotion)
     ESP_LOGI(TAG, "SetEmotion: %s", emotion);
     if (emote_handle_ && emotion && strlen(emotion) > 0) {
         emote_set_anim_emoji(emote_handle_, emotion);
+        emote_set_mouth_emotion(emote_handle_, emotion);
     }
 }
 
