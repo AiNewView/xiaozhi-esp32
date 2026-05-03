@@ -8,6 +8,7 @@ enum DeviceState {
     kDeviceStateIdle,
     kDeviceStateConnecting,
     kDeviceStateListening,
+    kDeviceStateProcessing,
     kDeviceStateSpeaking,
     kDeviceStateUpgrading,
     kDeviceStateActivating,

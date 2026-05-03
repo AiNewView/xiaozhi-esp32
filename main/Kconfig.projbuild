@@ -968,4 +968,72 @@ menu "TAIJIPAI_S3_CONFIG"
         启动双声道
 endmenu
 
+menu "Custom LLM Configuration"
+
+config CUSTOM_LLM_ENABLED
+    bool "Enable Custom LLM API"
+    default n
+    help
+        Replace server-side LLM with your own API (e.g., DeepSeek).
+        Flow: Server ASR → Custom LLM → Server TTS (via "speak" protocol message).
+        Only LLM API key is required. TTS is handled by the server.
+        NOTE: Requires server-side support for the "speak" message type.
+
+config CUSTOM_LLM_API_ENDPOINT
+    depends on CUSTOM_LLM_ENABLED
+    string "LLM Chat Completions Endpoint URL"
+    default "https://api.deepseek.com/v1/chat/completions"
+    help
+        Full URL for OpenAI-compatible chat completions API.
+        Examples:
+        - DeepSeek: https://api.deepseek.com/v1/chat/completions
+        - Qwen (DashScope): https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+        - OpenAI: https://api.openai.com/v1/chat/completions
+
+config CUSTOM_LLM_API_KEY
+    depends on CUSTOM_LLM_ENABLED
+    string "LLM API Key"
+    default ""
+    help
+        API key (Bearer token) for the LLM service.
+
+config CUSTOM_LLM_MODEL
+    depends on CUSTOM_LLM_ENABLED
+    string "LLM Model Name"
+    default "deepseek-chat"
+    help
+        Model identifier for the chat completions API.
+
+config CUSTOM_LLM_SYSTEM_PROMPT
+    depends on CUSTOM_LLM_ENABLED
+    string "LLM System Prompt"
+    default "You are a helpful voice assistant. Keep responses short and conversational."
+    help
+        System prompt injected before user messages.
+
+config CUSTOM_TTS_API_ENDPOINT
+    depends on CUSTOM_LLM_ENABLED
+    string "TTS API Endpoint URL (optional, for local TTS)"
+    default ""
+    help
+        Full URL for OpenAI-compatible text-to-speech API.
+        Leave empty to use server-side TTS (default).
+        Only set this if you want local TTS instead of server TTS.
+
+config CUSTOM_TTS_API_KEY
+    depends on CUSTOM_LLM_ENABLED
+    string "TTS API Key (optional, for local TTS)"
+    default ""
+    help
+        API key for the TTS service. Leave empty to use server-side TTS.
+
+config CUSTOM_TTS_MODEL
+    depends on CUSTOM_LLM_ENABLED
+    string "TTS Model Name (optional)"
+    default "tts-1"
+    help
+        Model identifier: tts-1 (faster) or tts-1-hd (higher quality).
+
+endmenu
+
 endmenu

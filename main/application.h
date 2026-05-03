@@ -17,6 +17,10 @@
 #include "device_state.h"
 #include "device_state_machine.h"
 
+#if CONFIG_CUSTOM_LLM_ENABLED
+#include "custom_llm_pipeline.h"
+#endif
+
 // Main event bits
 #define MAIN_EVENT_SCHEDULE             (1 << 0)
 #define MAIN_EVENT_SEND_AUDIO           (1 << 1)
@@ -31,6 +35,8 @@
 #define MAIN_EVENT_START_LISTENING      (1 << 10)
 #define MAIN_EVENT_STOP_LISTENING       (1 << 11)
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
+#define MAIN_EVENT_LLM_COMPLETE         (1 << 13)
+#define MAIN_EVENT_PLAYBACK_DONE        (1 << 14)
 
 
 enum AecMode {
@@ -108,6 +114,7 @@ public:
     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
+    void SendSpeakText(const std::string& text);
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
@@ -141,7 +148,17 @@ private:
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     int clock_ticks_ = 0;
+    int playback_done_timer_ms_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
+
+#if CONFIG_CUSTOM_LLM_ENABLED
+    bool use_custom_llm_ = false;
+    std::unique_ptr<CustomLlmPipeline> custom_llm_pipeline_;
+    std::vector<int16_t> tts_pcm_buffer_;
+    int tts_sample_rate_ = 0;
+    std::string pending_speak_text_;
+    bool is_speak_session_ = false;
+#endif
 
 
     // Event handlers
@@ -153,8 +170,16 @@ private:
     void HandleNetworkDisconnectedEvent();
     void HandleActivationDoneEvent();
     void HandleWakeWordDetectedEvent();
+    void HandlePlaybackDoneEvent();
     void ContinueOpenAudioChannel(ListeningMode mode);
     void ContinueWakeWordInvoke(const std::string& wake_word);
+
+#if CONFIG_CUSTOM_LLM_ENABLED
+    void InitializeCustomLlm();
+    void HandleSttForCustomLlm(const std::string& text);
+    void OnCustomLlmComplete(bool success, std::vector<int16_t>&& pcm_data, int sample_rate, const std::string& text_response, const std::string& error_message);
+    void StartCustomLlmPlayback();
+#endif
 
     // Activation task (runs in background)
     void ActivationTask();

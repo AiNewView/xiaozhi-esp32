@@ -78,6 +78,17 @@ void Protocol::SendMcpMessage(const std::string& payload) {
     SendText(message);
 }
 
+void Protocol::SendSpeakText(const std::string& text) {
+    auto* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "session_id", session_id_.c_str());
+    cJSON_AddStringToObject(root, "type", "speak");
+    cJSON_AddStringToObject(root, "text", text.c_str());
+    char* json_str = cJSON_PrintUnformatted(root);
+    SendText(json_str);
+    cJSON_free(json_str);
+    cJSON_Delete(root);
+}
+
 bool Protocol::IsTimeout() const {
     const int kTimeoutSeconds = 120;
     auto now = std::chrono::steady_clock::now();

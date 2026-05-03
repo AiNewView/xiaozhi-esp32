@@ -1,4 +1,5 @@
 #include "audio_service.h"
+#include "board.h"
 #include <esp_log.h>
 #include <cstring>
 
@@ -513,6 +514,47 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
         }
     }
     audio_decode_queue_.push_back(std::move(packet));
+    audio_queue_cv_.notify_all();
+    return true;
+}
+
+bool AudioService::PushPcmToPlaybackQueue(std::vector<int16_t>&& pcm_data, int sample_rate) {
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (!codec) {
+        return false;
+    }
+    int output_rate = codec->output_sample_rate();
+
+    // Resample if needed
+    if (sample_rate != output_rate) {
+        esp_ae_rate_cvt_cfg_t resampler_cfg = RATE_CVT_CFG(sample_rate, output_rate, ESP_AUDIO_MONO);
+        esp_ae_rate_cvt_handle_t resampler = nullptr;
+        auto ret = esp_ae_rate_cvt_open(&resampler_cfg, &resampler);
+        if (resampler == nullptr) {
+            ESP_LOGE(TAG, "Failed to create PCM resampler: %d", ret);
+            return false;
+        }
+        uint32_t target_size = 0;
+        esp_ae_rate_cvt_get_max_out_sample_num(resampler, pcm_data.size(), &target_size);
+        std::vector<int16_t> resampled(target_size);
+        uint32_t actual_output = target_size;
+        esp_ae_rate_cvt_process(resampler, (esp_ae_sample_t)pcm_data.data(), pcm_data.size(),
+                                (esp_ae_sample_t)resampled.data(), &actual_output);
+        resampled.resize(actual_output);
+        esp_ae_rate_cvt_close(resampler);
+        pcm_data = std::move(resampled);
+    }
+
+    auto task = std::make_unique<AudioTask>();
+    task->type = kAudioTaskTypeDecodeToPlaybackQueue;
+    task->pcm = std::move(pcm_data);
+    task->timestamp = 0;
+
+    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    if (audio_playback_queue_.size() >= MAX_PLAYBACK_TASKS_IN_QUEUE) {
+        return false;
+    }
+    audio_playback_queue_.push_back(std::move(task));
     audio_queue_cv_.notify_all();
     return true;
 }

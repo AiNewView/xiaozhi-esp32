@@ -29,6 +29,9 @@ set(SOURCES "audio/audio_codec.cc"
             "protocols/protocol.cc"
             "protocols/mqtt_protocol.cc"
             "protocols/websocket_protocol.cc"
+            "llm/llm_client.cc"
+            "llm/tts_client.cc"
+            "llm/custom_llm_pipeline.cc"
             "mcp_server.cc"
             "system_info.cc"
             "application.cc"
@@ -39,7 +42,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols")
+set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "audio/demuxer" "protocols" "llm")
 
 # Add board common files
 list(APPEND SOURCES

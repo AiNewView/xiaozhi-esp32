@@ -163,6 +163,10 @@ void Application::Initialize() {
 
     // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
+
+#if CONFIG_CUSTOM_LLM_ENABLED
+    InitializeCustomLlm();
+#endif
 }
 
 void Application::Run() {
@@ -182,7 +186,9 @@ void Application::Run() {
         MAIN_EVENT_START_LISTENING |
         MAIN_EVENT_STOP_LISTENING |
         MAIN_EVENT_ACTIVATION_DONE |
-        MAIN_EVENT_STATE_CHANGED;
+        MAIN_EVENT_STATE_CHANGED |
+        MAIN_EVENT_LLM_COMPLETE |
+        MAIN_EVENT_PLAYBACK_DONE;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -206,6 +212,10 @@ void Application::Run() {
 
         if (bits & MAIN_EVENT_STATE_CHANGED) {
             HandleStateChangedEvent();
+        }
+
+        if (bits & MAIN_EVENT_PLAYBACK_DONE) {
+            HandlePlaybackDoneEvent();
         }
 
         if (bits & MAIN_EVENT_TOGGLE_CHAT) {
@@ -510,11 +520,28 @@ void Application::InitializeProtocol() {
             ESP_LOGW(TAG, "Server sample rate %d does not match device output sample rate %d, resampling may cause distortion",
                 protocol_->server_sample_rate(), codec->output_sample_rate());
         }
+#if CONFIG_CUSTOM_LLM_ENABLED
+        if (!pending_speak_text_.empty()) {
+            ESP_LOGI(TAG, "Sending speak text to server for TTS");
+            protocol_->SendSpeakText(pending_speak_text_);
+            pending_speak_text_.clear();
+        }
+#endif
     });
     
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
+#if CONFIG_CUSTOM_LLM_ENABLED
+            if (!is_speak_session_ && (GetDeviceState() == kDeviceStateProcessing || !pending_speak_text_.empty())) {
+                ESP_LOGD(TAG, "Custom LLM: audio channel closed but skipping Idle (state=%s, is_speak=%d)",
+                         DeviceStateMachine::GetStateName(GetDeviceState()), is_speak_session_);
+                return;
+            }
+            if (is_speak_session_) {
+                ESP_LOGI(TAG, "Custom LLM: audio channel closed during speak session, forcing Idle");
+            }
+#endif
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage("system", "");
             SetDeviceState(kDeviceStateIdle);
@@ -528,11 +555,40 @@ void Application::InitializeProtocol() {
             auto state = cJSON_GetObjectItem(root, "state");
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
+#if CONFIG_CUSTOM_LLM_ENABLED
+                    ESP_LOGI(TAG, "TTS start received: state=%s, is_speak=%d",
+                             DeviceStateMachine::GetStateName(GetDeviceState()), is_speak_session_);
+                    if (GetDeviceState() != kDeviceStateListening &&
+                        !(is_speak_session_ && GetDeviceState() == kDeviceStateProcessing)) {
+                        ESP_LOGW(TAG, "TTS start ignored: unexpected state for TTS");
+                        return;
+                    }
+#else
+                    if (GetDeviceState() != kDeviceStateListening) {
+                        return;
+                    }
+#endif
                     aborted_ = false;
                     SetDeviceState(kDeviceStateSpeaking);
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
+#if CONFIG_CUSTOM_LLM_ENABLED
+                    if (is_speak_session_) {
+                        ESP_LOGI(TAG, "Speak session TTS stop, state=%s", DeviceStateMachine::GetStateName(GetDeviceState()));
+                        is_speak_session_ = false;
+                        if (listening_mode_ == kListeningModeManualStop) {
+                            SetDeviceState(kDeviceStateIdle);
+                            if (protocol_ && protocol_->IsAudioChannelOpened()) {
+                                protocol_->CloseAudioChannel();
+                            }
+                        } else {
+                            SetDeviceState(kDeviceStateListening);
+                            // Keep audio channel open — reuse for listening
+                        }
+                        return;
+                    }
+#endif
                     if (GetDeviceState() == kDeviceStateSpeaking) {
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
@@ -545,8 +601,15 @@ void Application::InitializeProtocol() {
                 auto text = cJSON_GetObjectItem(root, "text");
                 if (cJSON_IsString(text)) {
                     ESP_LOGI(TAG, "<< %s", text->valuestring);
-                    Schedule([display, message = std::string(text->valuestring)]() {
+                    Schedule([this, display, message = std::string(text->valuestring)]() {
                         display->SetChatMessage("assistant", message.c_str());
+#if CONFIG_CUSTOM_LLM_ENABLED
+                        if (is_speak_session_ && GetDeviceState() == kDeviceStateProcessing) {
+                            ESP_LOGI(TAG, "Sentence start in speak session, transitioning to Speaking");
+                            aborted_ = false;
+                            SetDeviceState(kDeviceStateSpeaking);
+                        }
+#endif
                     });
                 }
             }
@@ -554,9 +617,22 @@ void Application::InitializeProtocol() {
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
-                Schedule([display, message = std::string(text->valuestring)]() {
+                std::string stt_text(text->valuestring);
+#if CONFIG_CUSTOM_LLM_ENABLED
+                if (use_custom_llm_) {
+                    Schedule([this, stt_text = std::move(stt_text)]() {
+                        HandleSttForCustomLlm(stt_text);
+                    });
+                } else {
+                    Schedule([display, message = std::move(stt_text)]() {
+                        display->SetChatMessage("user", message.c_str());
+                    });
+                }
+#else
+                Schedule([display, message = std::move(stt_text)]() {
                     display->SetChatMessage("user", message.c_str());
                 });
+#endif
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
             auto emotion = cJSON_GetObjectItem(root, "emotion");
@@ -906,6 +982,12 @@ void Application::HandleStateChangedEvent() {
                 audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
             }
             break;
+        case kDeviceStateProcessing:
+            display->SetStatus(Lang::Strings::THINKING);
+            display->SetEmotion("thinking");
+            audio_service_.EnableVoiceProcessing(false);
+            audio_service_.EnableWakeWordDetection(false);
+            break;
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
 
@@ -1075,6 +1157,14 @@ void Application::SendMcpMessage(const std::string& payload) {
     });
 }
 
+void Application::SendSpeakText(const std::string& text) {
+    Schedule([this, text = std::move(text)]() {
+        if (protocol_) {
+            protocol_->SendSpeakText(text);
+        }
+    });
+}
+
 void Application::SetAecMode(AecMode mode) {
     aec_mode_ = mode;
     Schedule([this]() {
@@ -1116,4 +1206,169 @@ void Application::ResetProtocol() {
         protocol_.reset();
     });
 }
+
+void Application::HandlePlaybackDoneEvent() {
+    if (GetDeviceState() == kDeviceStateSpeaking) {
+        ESP_LOGI(TAG, "Custom TTS playback done");
+        if (listening_mode_ == kListeningModeManualStop) {
+            SetDeviceState(kDeviceStateIdle);
+        } else {
+            SetDeviceState(kDeviceStateListening);
+        }
+    }
+}
+
+#if CONFIG_CUSTOM_LLM_ENABLED
+void Application::InitializeCustomLlm() {
+    auto& board = Board::GetInstance();
+
+    CustomLlmPipeline::Config config;
+    config.llm.api_endpoint = CONFIG_CUSTOM_LLM_API_ENDPOINT;
+    config.llm.api_key = CONFIG_CUSTOM_LLM_API_KEY;
+    config.llm.model = CONFIG_CUSTOM_LLM_MODEL;
+    config.llm.system_prompt = CONFIG_CUSTOM_LLM_SYSTEM_PROMPT;
+    config.use_tts = false;  // Use server TTS instead of local TTS client
+
+    // Check NVS for runtime overrides
+    Settings llm_settings("custom_llm", true);
+    std::string api_key = llm_settings.GetString("api_key");
+    if (!api_key.empty()) {
+        config.llm.api_key = api_key;
+    }
+
+    // Only enable if we have an API key
+    if (!config.llm.api_key.empty() && !config.llm.api_endpoint.empty()) {
+        use_custom_llm_ = true;
+        custom_llm_pipeline_ = std::make_unique<CustomLlmPipeline>();
+        custom_llm_pipeline_->SetConfig(config);
+        ESP_LOGI(TAG, "Custom LLM enabled (server TTS): endpoint=%s, model=%s",
+                 config.llm.api_endpoint.c_str(), config.llm.model.c_str());
+    } else {
+        use_custom_llm_ = false;
+        ESP_LOGW(TAG, "Custom LLM disabled: configure API key and endpoint in menuconfig or NVS");
+    }
+}
+
+void Application::HandleSttForCustomLlm(const std::string& text) {
+    ESP_LOGI(TAG, "Custom LLM: intercepting STT text: %s", text.c_str());
+
+    is_speak_session_ = false;
+
+    auto display = Board::GetInstance().GetDisplay();
+    display->SetChatMessage("user", text.c_str());
+
+    // Abort server-side processing to prevent server LLM+TTS
+    if (protocol_) {
+        protocol_->SendAbortSpeaking(kAbortReasonNone);
+        if (protocol_->IsAudioChannelOpened()) {
+            protocol_->CloseAudioChannel();
+        }
+    }
+
+    // Transition to Processing state (shows "thinking" on display)
+    SetDeviceState(kDeviceStateProcessing);
+
+    if (!custom_llm_pipeline_) {
+        ESP_LOGE(TAG, "Custom LLM pipeline not initialized");
+        display->SetChatMessage("system", "LLM not configured");
+        SetDeviceState(kDeviceStateIdle);
+        return;
+    }
+
+    // Start pipeline in background task
+    custom_llm_pipeline_->Process(text, [this](bool success, std::vector<int16_t>&& pcm_data, int sample_rate, const std::string& text_response, const std::string& error_message) {
+        // Callback from pipeline worker task — schedule to main thread
+        Schedule([this, success, pcm = std::move(pcm_data), sample_rate, text_response = std::move(text_response), error_message = std::move(error_message)]() mutable {
+            OnCustomLlmComplete(success, std::move(pcm), sample_rate, text_response, error_message);
+        });
+    });
+}
+
+void Application::OnCustomLlmComplete(bool success, std::vector<int16_t>&& pcm_data, int sample_rate, const std::string& text_response, const std::string& error_message) {
+    auto display = Board::GetInstance().GetDisplay();
+
+    if (!success) {
+        ESP_LOGE(TAG, "Custom LLM pipeline failed: %s", error_message.c_str());
+        display->SetChatMessage("system", error_message.c_str());
+        display->SetEmotion("neutral");
+        SetDeviceState(kDeviceStateIdle);
+        return;
+    }
+
+    if (text_response.empty()) {
+        ESP_LOGW(TAG, "Custom LLM: empty text response");
+        SetDeviceState(kDeviceStateIdle);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Custom LLM response: %s", text_response.c_str());
+
+    // Display the assistant text
+    display->SetChatMessage("assistant", text_response.c_str());
+
+    // If no PCM audio data, use server TTS
+    if (pcm_data.empty()) {
+        ESP_LOGI(TAG, "No local TTS, using server TTS for response");
+        display->SetEmotion("happy");
+        // Store text to send to server after audio channel opens
+        pending_speak_text_ = text_response;
+        is_speak_session_ = true;
+        // Open audio channel (OnAudioChannelOpened will send the speak text)
+        if (protocol_ && !protocol_->IsAudioChannelOpened()) {
+            protocol_->OpenAudioChannel();
+        } else if (protocol_) {
+            // Channel already open, send directly
+            protocol_->SendSpeakText(pending_speak_text_);
+            pending_speak_text_.clear();
+        }
+        return;
+    }
+
+    // Store PCM for playback
+    tts_pcm_buffer_ = std::move(pcm_data);
+    tts_sample_rate_ = sample_rate;
+
+    StartCustomLlmPlayback();
+}
+
+void Application::StartCustomLlmPlayback() {
+    if (tts_pcm_buffer_.empty()) {
+        SetDeviceState(kDeviceStateIdle);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Starting custom TTS playback: %u samples, %d Hz",
+             tts_pcm_buffer_.size(), tts_sample_rate_);
+
+    // Transition to Speaking state
+    SetDeviceState(kDeviceStateSpeaking);
+
+    // Push all PCM in chunks (60ms frames matching codec timing)
+    const int frame_samples_at_tts_rate = tts_sample_rate_ * 60 / 1000;
+    size_t offset = 0;
+
+    while (offset < tts_pcm_buffer_.size()) {
+        size_t chunk_size = std::min((size_t)frame_samples_at_tts_rate, tts_pcm_buffer_.size() - offset);
+        std::vector<int16_t> chunk(tts_pcm_buffer_.begin() + offset, tts_pcm_buffer_.begin() + offset + chunk_size);
+        offset += chunk_size;
+
+        while (!audio_service_.PushPcmToPlaybackQueue(std::move(chunk), tts_sample_rate_)) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
+
+    // Free the PCM buffer after pushing
+    std::vector<int16_t>().swap(tts_pcm_buffer_);
+
+    // Schedule playback-done after estimated duration + buffer
+    playback_done_timer_ms_ = (offset * 1000) / tts_sample_rate_ + 500;
+
+    xTaskCreate([](void* arg) {
+        Application* app = static_cast<Application*>(arg);
+        vTaskDelay(pdMS_TO_TICKS(app->playback_done_timer_ms_));
+        xEventGroupSetBits(app->event_group_, MAIN_EVENT_PLAYBACK_DONE);
+        vTaskDelete(NULL);
+    }, "playback_timer", 2048, this, 1, nullptr);
+}
+#endif
 
