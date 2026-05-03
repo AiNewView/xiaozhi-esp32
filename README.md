@@ -36,6 +36,7 @@ The stable version of v1 is 1.9.2. You can switch to v1 by running `git checkout
 - Device-side MCP for device control (Speaker, LED, Servo, GPIO, etc.)
 - Cloud-side MCP to extend large model capabilities (smart home control, PC desktop operation, knowledge search, email, etc.)
 - Customizable wake words, fonts, emojis, and chat backgrounds with online web-based editing ([Custom Assets Generator](https://github.com/78/xiaozhi-assets-generator))
+- Direct LLM API access (DeepSeek / Qwen / OpenAI-compatible), bypassing server-side LLM, with continuous conversation without repeated wake word
 
 ## Hardware
 
@@ -133,6 +134,27 @@ The firmware connects to the official [xiaozhi.me](https://xiaozhi.me) server by
 If you already have a XiaoZhi AI chatbot device and have connected to the official server, you can log in to the [xiaozhi.me](https://xiaozhi.me) console for configuration.
 
 👉 [Backend Operation Video Tutorial (Old Interface)](https://www.bilibili.com/video/BV1jUCUY2EKM/)
+
+### Custom LLM API
+
+If your device connects to a self-hosted server, you can configure the ESP32 to call LLM APIs directly via Kconfig, bypassing the server's LLM processing.
+
+**How it works:**
+1. Server handles ASR and returns STT text to the device
+2. ESP32 intercepts STT text and calls DeepSeek / OpenAI-compatible API via HTTPS
+3. LLM response text is sent to server for TTS synthesis via `speak` message
+4. After the first response, the device enters continuous listening mode — no wake word needed for follow-up questions
+
+**Configuration (`idf.py menuconfig`):**
+
+Under `Custom LLM Configuration` menu:
+- `CONFIG_CUSTOM_LLM_ENABLED` — Enable custom LLM
+- `CONFIG_CUSTOM_LLM_API_ENDPOINT` — API endpoint (e.g. `https://api.deepseek.com/v1`)
+- `CONFIG_CUSTOM_LLM_API_KEY` — API key
+- `CONFIG_CUSTOM_LLM_MODEL` — Model name (default `deepseek-chat`)
+- `CONFIG_CUSTOM_LLM_SYSTEM_PROMPT` — System prompt
+
+Runtime overrides are also supported via NVS under the `custom_llm` namespace.
 
 ## Related Open Source Projects
 

@@ -36,6 +36,7 @@ v1 的稳定版本为 1.9.2，可以通过 `git checkout v1` 来切换到 v1 版
 - 通过设备端 MCP 实现设备控制（音量、灯光、电机、GPIO 等）
 - 通过云端 MCP 扩展大模型能力（智能家居控制、PC桌面操作、知识搜索、邮件收发等）
 - 自定义唤醒词、字体、表情与聊天背景，支持网页端在线修改 ([自定义Assets生成器](https://github.com/78/xiaozhi-assets-generator))
+- 支持通过 API 直接访问大模型（DeepSeek / Qwen / OpenAI 兼容接口），无需依赖服务端 LLM，连续对话无需重复唤醒
 
 ## 硬件
 
@@ -133,6 +134,27 @@ v1 的稳定版本为 1.9.2，可以通过 `git checkout v1` 来切换到 v1 版
 如果你已经拥有一个小智 AI 聊天机器人设备，并且已接入官方服务器，可以登录 [xiaozhi.me](https://xiaozhi.me) 控制台进行配置。
 
 👉 [后台操作视频教程（旧版界面）](https://www.bilibili.com/video/BV1jUCUY2EKM/)
+
+### 自定义大模型 API
+
+如果你的设备连接的是自部署服务端，可以通过 Kconfig 配置让 ESP32 直接调用大模型 API，无需依赖服务端的 LLM 处理。
+
+**工作流程：**
+1. 服务端负责语音识别（ASR），将 STT 文本返回给设备
+2. ESP32 拦截 STT 文本，通过 HTTPS 直接调用 DeepSeek / OpenAI 兼容 API
+3. 大模型回复的文本通过 `speak` 消息发送到服务端进行 TTS 语音合成
+4. 第一轮对话结束后自动进入连续聆听模式，无需重复唤醒即可继续提问
+
+**配置方法（`idf.py menuconfig`）：**
+
+进入 `Custom LLM Configuration` 菜单：
+- `CONFIG_CUSTOM_LLM_ENABLED` — 启用自定义 LLM
+- `CONFIG_CUSTOM_LLM_API_ENDPOINT` — API 地址（如 `https://api.deepseek.com/v1`）
+- `CONFIG_CUSTOM_LLM_API_KEY` — API 密钥
+- `CONFIG_CUSTOM_LLM_MODEL` — 模型名称（默认 `deepseek-chat`）
+- `CONFIG_CUSTOM_LLM_SYSTEM_PROMPT` — 系统提示词
+
+该功能也支持运行时通过 NVS 覆盖配置，命名空间为 `custom_llm`。
 
 ## 相关开源项目
 
